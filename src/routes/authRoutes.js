@@ -9,7 +9,16 @@ import {
   getCertificate,
   registerValidation, 
   loginValidation,
-  upload 
+  upload,
+  forgotPassword,
+  verifyOtp,
+  resendOtp,
+  resetPassword,
+  changePassword,
+  googleAuthStart,
+  googleAuthCallback,
+  facebookAuthStart,
+  facebookAuthCallback
 } from '../controllers/authController.js';
 import { authenticateToken } from '../middlewares/authMiddleware.js';
 
@@ -37,6 +46,18 @@ router.post('/login',
   login
 );
 
+// OAuth routes
+router.get('/google', googleAuthStart);
+router.get('/google/callback', googleAuthCallback);
+router.get('/facebook', facebookAuthStart);
+router.get('/facebook/callback', facebookAuthCallback);
+
+// Password reset / OTP routes
+router.post('/forgot-password', forgotPassword);
+router.post('/verify-otp', verifyOtp);
+router.post('/resend-otp', resendOtp);
+router.post('/reset-password', resetPassword);
+
 // Protected routes
 router.get('/profile', 
   authenticateToken, 
@@ -46,6 +67,11 @@ router.get('/profile',
 router.put('/profile', 
   authenticateToken, 
   updateProfile
+);
+
+router.post('/change-password', 
+  authenticateToken,
+  changePassword
 );
 
 // Admin routes

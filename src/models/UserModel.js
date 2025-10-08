@@ -95,7 +95,7 @@ class UserModel {
       FROM users u 
       LEFT JOIN student_details sd ON u.user_id = sd.user_id 
       LEFT JOIN qari_details qd ON u.user_id = qd.user_id 
-      WHERE u.email = $1
+      WHERE LOWER(u.email) = LOWER($1)
     `;
     const result = await pool.query(query, [email]);
     return result.rows[0];
@@ -193,6 +193,21 @@ class UserModel {
     }
   }
 
+  // Update password by email (used for password reset)
+  static async updatePasswordByEmail(email, newPassword) {
+    const hashed = await bcrypt.hash(newPassword, 12);
+    const query = `UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING user_id`;
+    const result = await pool.query(query, [hashed, email]);
+    return result.rowCount > 0;
+  }
+
+  static async updatePasswordById(userId, newPassword) {
+    const hashed = await bcrypt.hash(newPassword, 12);
+    const query = `UPDATE users SET password_hash = $1 WHERE user_id = $2 RETURNING user_id`;
+    const result = await pool.query(query, [hashed, userId]);
+    return result.rowCount > 0;
+  }
+
   static async verifyPassword(plainPassword, hashedPassword) {
     return await bcrypt.compare(plainPassword, hashedPassword);
   }
@@ -230,7 +245,7 @@ class UserModel {
   }
   static async getStudentDetails(userId) {
     const result = await pool.query(
-      `SELECT country, city, address, phone_number, date_of_birth, guardian_name, guardian_phone, learning_goal
+      `SELECT country, city, address, phone_no, dob, guardian_name, guardian_phone, learning_goal
        FROM student_details WHERE user_id = $1`,
       [userId]
     );
@@ -239,7 +254,7 @@ class UserModel {
   
   static async getQariDetails(userId) {
     const result = await pool.query(
-      `SELECT country, city, address, phone_number, date_of_birth, bio, certificate_path
+      `SELECT country, city, address, phone_no, dob, bio, certificate_path
        FROM qari_details WHERE user_id = $1`,
       [userId]
     );
@@ -286,6 +301,29 @@ class UserModel {
     `;
     const result = await pool.query(query);
     return result.rows;
+  }
+static async findOrCreateOAuthUser({ email, name, role = 'student' }) {
+    // Try to find existing user by email
+    const existing = await this.findUserByEmail(email)
+    if (existing) return existing
+
+    // Create minimal user with random password to satisfy NOT NULL
+    const randomPass = Math.random().toString(36).slice(2) + Date.now().toString(36)
+    const hashedPassword = await bcrypt.hash(randomPass, 12)
+
+    const client = await pool.connect()
+    try {
+      const insert = `
+        INSERT INTO users (full_name, email, password_hash, role, created_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        RETURNING user_id, full_name, email, role, created_at
+      `
+      const values = [name || email.split('@')[0], email, hashedPassword, role.toLowerCase()]
+      const result = await client.query(insert, values)
+      return result.rows[0]
+    } finally {
+      client.release()
+    }
   }
 }
 

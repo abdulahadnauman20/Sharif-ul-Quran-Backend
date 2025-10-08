@@ -160,3 +160,61 @@ curl -X GET http://localhost:3000/api/auth/profile \
 The server runs on `http://localhost:3000` by default. All API endpoints are prefixed with `/api/auth` for authentication routes.
 
 For development, use `npm run dev` which will automatically restart the server when files change.
+
+## OTP / Password Reset: Database migration & SMTP setup
+
+If you want to enable the OTP-based password reset flow (email delivery via Gmail), follow these steps:
+
+1) Apply DB migration to add OTP-related columns
+
+Run the SQL migration included in this repository to add the required columns to the `users` table:
+
+```bash
+psql -U your_username -d your_database -f database/migrations/2025-10-02_add_otp_columns.sql
+```
+
+This will add the columns: `otp`, `otp_expiry`, `otp_attempts`, `otp_last_attempt`.
+
+2) Configure Gmail SMTP (recommended)
+
+Create a `.env` file in the project root (or set environment variables) with these keys filled:
+
+```env
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=your_db
+DB_USER=your_user
+DB_PASSWORD=your_password
+
+# JWT
+JWT_SECRET=your_jwt_secret
+
+# SMTP (use Gmail account and an App Password)
+SMTP_USER=teamtestsphere@gmail.com
+SMTP_PASS=YOUR_GMAIL_APP_PASSWORD
+SMTP_FROM=teamtestsphere@gmail.com
+
+# Optional dev helper: return OTP in API response (development only)
+DEV_RETURN_OTP=true
+
+PORT=3000
+NODE_ENV=development
+```
+
+Important: for Gmail you should create an App Password (recommended) instead of allowing less-secure apps. See Google Account -> Security -> App passwords. Use the generated 16-character password as `SMTP_PASS`.
+
+3) Restart the backend
+
+After applying the migration and setting `.env`, restart the server:
+
+```bash
+npm run dev
+```
+
+4) Test the flow
+
+- POST `/api/auth/forgot-password` with `{ "email": "existing_user@example.com" }` — you'll get a success response. If `DEV_RETURN_OTP=true` you'll receive the OTP in the response during development.
+- Use `/api/auth/verify-otp`, `/api/auth/reset-password` as described in code.
+
+If sending fails, the server will log the OTP to the console as a fallback so you can continue testing.

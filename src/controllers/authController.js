@@ -4,6 +4,10 @@ import { body, validationResult } from 'express-validator';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import pool from '../config/db.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import fetch from 'node-fetch';
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -39,6 +43,182 @@ export const upload = multer({
     fileSize: 5 * 1024 * 1024 // 5MB limit
   }
 });
+
+// Generate 6-digit OTP
+const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+
+// sendOtpEmail using Gmail service (nodemailer must be installed)
+const sendOtpEmail = async (toEmail, code) => {
+  try {
+    const nodemailer = await import('nodemailer');
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.SMTP_USER || process.env.EMAIL_USER,
+        pass: process.env.SMTP_PASS || process.env.EMAIL_PASS
+      }
+    });
+
+    const info = await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.EMAIL_USER || 'teamtestsphere@gmail.com',
+      to: toEmail,
+      subject: 'Password Reset OTP',
+      text: `Your OTP for password reset is: ${code}. This code expires in 10 minutes.`
+    });
+
+    console.log('OTP email sent:', info?.messageId || info);
+  } catch (err) {
+    console.error('Failed to send OTP email:', err);
+    // fallback to console
+    console.log(`[OTP fallback] To: ${toEmail} Code: ${code}`);
+  }
+};
+
+// Forgot password - send OTP (DB-backed)
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  let client;
+
+  try {
+    client = await pool.connect();
+
+    // Check if user exists
+    const userResult = await client.query('SELECT otp_attempts, otp_last_attempt FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Email does not exist in our database.' });
+    }
+
+    const user = userResult.rows[0];
+    const now = Date.now();
+    const lastAttempt = user.otp_last_attempt ? new Date(user.otp_last_attempt).getTime() : 0;
+    const tenMinutes = 10 * 60 * 1000;
+
+    if (now - lastAttempt < tenMinutes) {
+      if (user.otp_attempts >= 3) {
+        return res.status(429).json({ success: false, message: 'Maximum OTP attempts reached. Please try again after 10 minutes.' });
+      }
+      await client.query('UPDATE users SET otp_attempts = otp_attempts + 1 WHERE email = $1', [email]);
+    } else {
+      await client.query('UPDATE users SET otp_attempts = 1 WHERE email = $1', [email]);
+    }
+
+    const otp = generateOtp();
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+    await client.query('UPDATE users SET otp = $1, otp_expiry = $2, otp_last_attempt = $3 WHERE email = $4', [otp, otpExpiry, new Date(), email]);
+
+    // send email
+    await sendOtpEmail(email, otp);
+
+    const devReturn = process.env.NODE_ENV === 'development' || process.env.DEV_RETURN_OTP === 'true';
+    const responseBody = { success: true, message: 'OTP sent to your email.', from: process.env.SMTP_FROM || process.env.EMAIL_USER || 'teamtestsphere@gmail.com' };
+    if (devReturn) responseBody.devCode = otp;
+
+    res.status(200).json(responseBody);
+  } catch (err) {
+    console.error('Error in forgotPassword:', err);
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again later.' });
+  } finally {
+    if (client) client.release();
+  }
+};
+
+// Verify OTP
+// Verify OTP
+import crypto from "crypto";
+
+// Verify OTP
+// verifyOtp.js
+const verifyOtp = async (req, res) => {
+  const { email, code } = req.body;
+  const client = await pool.connect();
+  try {
+    const userResult = await client.query(
+      "SELECT otp, otp_expiry FROM users WHERE email = $1",
+      [email]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ success: false, message: "No OTP found for this email" });
+    }
+
+    const row = userResult.rows[0];
+    if (!row.otp || row.otp.trim() !== code.trim()) {
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    if (Date.now() > new Date(row.otp_expiry).getTime()) {
+      return res.status(400).json({ success: false, message: "OTP expired" });
+    }
+
+    // ✅ Instead of issuing resetToken, just confirm
+    return res.json({ success: true, message: "OTP verified, you can reset your password now" });
+  } finally {
+    client.release();
+  }
+};
+
+// resetPassword.js
+const resetPassword = async (req, res) => {
+  const { email, newPassword, code } = req.body; // include OTP here
+  const client = await pool.connect();
+  try {
+    const userResult = await client.query(
+      "SELECT otp, otp_expiry FROM users WHERE email = $1",
+      [email]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ success: false, message: "User not found" });
+    }
+
+    const row = userResult.rows[0];
+    if (!row.otp || row.otp.trim() !== code.trim()) {
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    if (Date.now() > new Date(row.otp_expiry).getTime()) {
+      return res.status(400).json({ success: false, message: "OTP expired" });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 12);
+    await client.query(
+      "UPDATE users SET password_hash = $1, otp = NULL, otp_expiry = NULL, otp_attempts = 0, otp_last_attempt = NULL WHERE email = $2",
+      [hashed, email]
+    );
+
+    res.json({ success: true, message: "Password reset successful" });
+  } finally {
+    client.release();
+  }
+};
+
+// Resend OTP (throttle)
+const resendOtp = async (req, res) => {
+  const { email } = req.body;
+  let client;
+
+  try {
+    client = await pool.connect();
+    const userResult = await client.query('SELECT otp_last_attempt FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Email not found' });
+
+    const lastAttempt = userResult.rows[0].otp_last_attempt ? new Date(userResult.rows[0].otp_last_attempt).getTime() : 0;
+    const now = Date.now();
+    if (now - lastAttempt < 30 * 1000) return res.status(429).json({ success: false, message: 'Please wait before resending code' });
+
+    const otp = generateOtp();
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    await client.query('UPDATE users SET otp = $1, otp_expiry = $2, otp_last_attempt = $3 WHERE email = $4', [otp, otpExpiry, new Date(), email]);
+
+    await sendOtpEmail(email, otp);
+    res.json({ success: true, message: 'Verification code resent' });
+  } catch (err) {
+    console.error('Error in resendOtp:', err);
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again later.' });
+  } finally {
+    if (client) client.release();
+  }
+};
+
 
 // Validation rules
 const registerValidation = [
@@ -343,10 +523,11 @@ const getProfile = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-    const { name, email, userType } = req.body;
+    const { name, userType } = req.body;
     const userId = req.user.userId;
 
-    const updatedUser = await UserModel.updateUser(userId, { name, email, userType });
+    // Disallow email change via this endpoint
+    const updatedUser = await UserModel.updateUser(userId, { name, email: req.user.email, userType });
     
     res.json({
       success: true,
@@ -361,6 +542,39 @@ const updateProfile = async (req, res) => {
     });
   }
 };
+
+// Change password (authenticated)
+const changePassword = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters' })
+    }
+
+    // Load user hashed password
+    const user = await UserModel.findUserById(userId)
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' })
+    }
+
+    const isValid = await UserModel.verifyPassword(currentPassword || '', user.password_hash)
+    if (!isValid) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' })
+    }
+
+    const ok = await UserModel.updatePasswordById(userId, newPassword)
+    if (!ok) {
+      return res.status(500).json({ success: false, message: 'Failed to update password' })
+    }
+
+    res.json({ success: true, message: 'Password updated successfully' })
+  } catch (error) {
+    console.error('Change password error:', error)
+    res.status(500).json({ success: false, message: 'Internal server error' })
+  }
+}
 
 const updateStudentDetails = async (req, res) => {
   try {
@@ -495,6 +709,191 @@ const getCertificate = async (req, res) => {
   }
 };
 
+// OAuth handlers: Google & Facebook
+const getBaseUrl = (req) => {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol);
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}`;
+};
+
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI; // Optional explicit override
+
+// GOOGLE OAUTH
+const googleAuthStart = async (req, res) => {
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({ success: false, message: 'Google OAuth is not configured (missing client id/secret)' })
+    }
+    const redirectUri = GOOGLE_REDIRECT_URI || `${getBaseUrl(req)}/api/auth/google/callback`;
+    const scope = ['openid', 'email', 'profile'].join(' ');
+    const state = encodeURIComponent(req.query.state || '');
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope,
+      access_type: 'offline',
+      prompt: 'consent',
+      state
+    });
+    const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    return res.redirect(url);
+  } catch (e) {
+    console.error('googleAuthStart error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to start Google auth' });
+  }
+};
+
+const googleAuthCallback = async (req, res) => {
+  try {
+    const code = req.query.code;
+    if (!code) return res.status(400).json({ success: false, message: 'Missing authorization code' })
+
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = GOOGLE_REDIRECT_URI || `${getBaseUrl(req)}/api/auth/google/callback`;
+
+    const tokenParams = new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code'
+    });
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenParams.toString()
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text().catch(() => '');
+      console.error('Google token error:', errText);
+      return res.status(400).json({ success: false, message: 'Failed to exchange code for token' });
+    }
+
+    const tokenJson = await tokenRes.json();
+    const accessToken = tokenJson.access_token;
+    if (!accessToken) return res.status(400).json({ success: false, message: 'No access token received' })
+
+    const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    if (!profileRes.ok) {
+      const errText = await profileRes.text().catch(() => '');
+      console.error('Google profile error:', errText);
+      return res.status(400).json({ success: false, message: 'Failed to fetch Google user profile' });
+    }
+
+    const profile = await profileRes.json();
+    const email = profile.email;
+    const name = profile.name || profile.given_name || profile.email?.split('@')[0] || 'Google User';
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Google account has no email available' });
+    }
+
+    const dbUser = await UserModel.findOrCreateOAuthUser({ email, name, role: 'student' });
+
+    const token = generateToken({ userId: dbUser.user_id, email: dbUser.email, role: dbUser.role });
+
+    const finalUrl = `${FRONTEND_URL}/?token=${encodeURIComponent(token)}#/portal`;
+    return res.redirect(finalUrl);
+  } catch (e) {
+    console.error('googleAuthCallback error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to handle Google auth callback' });
+  }
+};
+
+// FACEBOOK OAUTH
+const FACEBOOK_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || process.env.FACEBOOK_CALLBACK_URL; // Optional explicit override
+const facebookAuthStart = async (req, res) => {
+  try {
+    const appId = process.env.FACEBOOK_APP_ID || process.env.FACEBOOK_CLIENT_ID;
+    const appSecret = process.env.FACEBOOK_APP_SECRET || process.env.FACEBOOK_CLIENT_SECRET;
+    if (!appId || !appSecret) {
+      return res.status(500).json({ success: false, message: 'Facebook OAuth is not configured (missing app id/secret)' })
+    }
+    const redirectUri = FACEBOOK_REDIRECT_URI || `${getBaseUrl(req)}/api/auth/facebook/callback`;
+    const state = encodeURIComponent(req.query.state || '');
+
+    const params = new URLSearchParams({
+      client_id: appId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'public_profile,email',
+      state
+    });
+    const url = `https://www.facebook.com/v17.0/dialog/oauth?${params.toString()}`;
+    return res.redirect(url);
+  } catch (e) {
+    console.error('facebookAuthStart error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to start Facebook auth' });
+  }
+};
+
+const facebookAuthCallback = async (req, res) => {
+  try {
+    const code = req.query.code;
+    if (!code) return res.status(400).json({ success: false, message: 'Missing authorization code' })
+
+    const appId = process.env.FACEBOOK_APP_ID || process.env.FACEBOOK_CLIENT_ID;
+    const appSecret = process.env.FACEBOOK_APP_SECRET || process.env.FACEBOOK_CLIENT_SECRET;
+    const redirectUri = FACEBOOK_REDIRECT_URI || `${getBaseUrl(req)}/api/auth/facebook/callback`;
+
+    const tokenParams = new URLSearchParams({
+      client_id: appId,
+      client_secret: appSecret,
+      redirect_uri: redirectUri,
+      code
+    });
+
+    const tokenRes = await fetch(`https://graph.facebook.com/v17.0/oauth/access_token?${tokenParams.toString()}`, { method: 'GET' });
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text().catch(() => '');
+      console.error('Facebook token error:', errText);
+      return res.status(400).json({ success: false, message: 'Failed to exchange code for token' });
+    }
+
+    const tokenJson = await tokenRes.json();
+    const accessToken = tokenJson.access_token;
+    if (!accessToken) return res.status(400).json({ success: false, message: 'No access token received' })
+
+    const profileRes = await fetch(`https://graph.facebook.com/me?fields=id,name,email&access_token=${encodeURIComponent(accessToken)}`);
+
+    if (!profileRes.ok) {
+      const errText = await profileRes.text().catch(() => '');
+      console.error('Facebook profile error:', errText);
+      return res.status(400).json({ success: false, message: 'Failed to fetch Facebook user profile' });
+    }
+
+    const profile = await profileRes.json();
+    let email = profile.email;
+    const name = profile.name || 'Facebook User';
+
+    // Some Facebook accounts may not return email without extra permissions
+    if (!email) {
+      email = `${profile.id}@facebook.local`;
+    }
+
+    const dbUser = await UserModel.findOrCreateOAuthUser({ email, name, role: 'student' });
+
+    const token = generateToken({ userId: dbUser.user_id, email: dbUser.email, role: dbUser.role });
+
+    const finalUrl = `${FRONTEND_URL}/?token=${encodeURIComponent(token)}#/portal`;
+    return res.redirect(finalUrl);
+  } catch (e) {
+    console.error('facebookAuthCallback error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to handle Facebook auth callback' });
+  }
+};
+
 export {
   register,
   login,
@@ -505,5 +904,18 @@ export {
   getAllUsers,
   getCertificate,
   registerValidation,
-  loginValidation
+  loginValidation,
+  googleAuthStart,
+  googleAuthCallback,
+  facebookAuthStart,
+  facebookAuthCallback
+};
+
+// Additional exports for OTP/password reset
+export {
+  forgotPassword,
+  verifyOtp,
+  resendOtp,
+  resetPassword,
+  changePassword
 };
