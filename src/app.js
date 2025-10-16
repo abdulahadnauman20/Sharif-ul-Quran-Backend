@@ -8,6 +8,8 @@ dotenv.config();
 
 // Import routes
 import authRoutes from './routes/authRoutes.js';
+import calendarRoutes from './routes/calendarRoutes.js';
+import calendlyRoutes from './routes/calendlyRoutes.js';
 
 // Import middleware
 import { errorHandler } from './middlewares/authMiddleware.js';
@@ -29,24 +31,14 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // CORS configuration
-// Accept a comma-separated list in CORS_ORIGIN, e.g.:
-// CORS_ORIGIN=http://localhost:3000,http://localhost:5173
-const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:5173';
-const allowedOrigins = rawOrigins.split(',').map((s) => s.trim()).filter(Boolean);
-console.log('Allowed CORS origins:', allowedOrigins);
+console.log('CORS_ORIGIN env var:', process.env.CORS_ORIGIN);
 
+// For development, allow all origins
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (curl, server-to-server)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    // Block other origins
-    const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
-    return callback(new Error(msg), false);
-  },
+  origin: true, // Allow all origins in development
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
 }));
 
 // Body parsing middleware
@@ -64,6 +56,8 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api/auth', authRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/calendly', calendlyRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

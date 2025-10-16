@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "setup-db": "node scripts/setup-database.js",
+    "migrate": "node scripts/run-migration.js",
     "test-connection": "node scripts/test-connection.js",
     "test-registration": "node scripts/test-registration.js",
     "check-users": "node scripts/check-users.js",

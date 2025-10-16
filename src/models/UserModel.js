@@ -91,7 +91,10 @@ class UserModel {
         sd.country as student_country, sd.city as student_city, sd.address as student_address, 
         sd.phone_no as student_phone, sd.dob as student_dob, sd.guardian_name, sd.guardian_phone, sd.learning_goal,
         qd.country as qari_country, qd.city as qari_city, qd.address as qari_address, 
-        qd.phone_no as qari_phone, qd.dob as qari_dob, qd.bio as qari_bio, qd.certificate_path
+        qd.phone_no as qari_phone, qd.dob as qari_dob, qd.bio as qari_bio, qd.monthly_fee as qari_monthly_fee, qd.certificate_path,
+        qd.specialization as qari_specialization, qd.experience as qari_experience, qd.languages as qari_languages,
+        qd.teaching_style as qari_teaching_style, qd.availability as qari_availability, qd.hourly_rate as qari_hourly_rate, qd.gender as qari_gender,
+        qd.calendly_url as qari_calendly_url
       FROM users u 
       LEFT JOIN student_details sd ON u.user_id = sd.user_id 
       LEFT JOIN qari_details qd ON u.user_id = qd.user_id 
@@ -108,7 +111,10 @@ class UserModel {
         sd.country as student_country, sd.city as student_city, sd.address as student_address, 
         sd.phone_no as student_phone, sd.dob as student_dob, sd.guardian_name, sd.guardian_phone, sd.learning_goal,
         qd.country as qari_country, qd.city as qari_city, qd.address as qari_address, 
-        qd.phone_no as qari_phone, qd.dob as qari_dob, qd.bio as qari_bio, qd.certificate_path
+        qd.phone_no as qari_phone, qd.dob as qari_dob, qd.bio as qari_bio, qd.monthly_fee as qari_monthly_fee, qd.certificate_path,
+        qd.specialization as qari_specialization, qd.experience as qari_experience, qd.languages as qari_languages,
+        qd.teaching_style as qari_teaching_style, qd.availability as qari_availability, qd.hourly_rate as qari_hourly_rate, qd.gender as qari_gender,
+        qd.calendly_url as qari_calendly_url
       FROM users u 
       LEFT JOIN student_details sd ON u.user_id = sd.user_id 
       LEFT JOIN qari_details qd ON u.user_id = qd.user_id 
@@ -156,18 +162,45 @@ class UserModel {
 
   // Update Qari details
   static async updateQariDetails(userId, qariData) {
-    const { country, city, address, phoneNumber, dateOfBirth, bio, certificatePath } = qariData;
+    const { country, city, address, phoneNumber, dateOfBirth, bio, monthlyFee, certificatePath,
+      specialization, experience, languages, teachingStyle, availability, hourlyRate, gender, calendlyUrl } = qariData;
 
     const query = `
-      UPDATE qari_details 
-      SET country = $1, city = $2, address = $3, phone_no = $4, 
-          dob = $5, bio = $6, certificate_path = $7, updated_at = NOW()
-      WHERE user_id = $8
+      INSERT INTO qari_details (user_id, country, city, address, phone_no, dob, bio, monthly_fee, certificate_path, specialization, experience, languages, teaching_style, availability, hourly_rate, gender, calendly_url, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 0), $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET 
+        country = EXCLUDED.country,
+        city = EXCLUDED.city,
+        address = EXCLUDED.address,
+        phone_no = EXCLUDED.phone_no,
+        dob = EXCLUDED.dob,
+        bio = EXCLUDED.bio,
+        monthly_fee = EXCLUDED.monthly_fee,
+        certificate_path = EXCLUDED.certificate_path,
+        specialization = EXCLUDED.specialization,
+        experience = EXCLUDED.experience,
+        languages = EXCLUDED.languages,
+        teaching_style = EXCLUDED.teaching_style,
+        availability = EXCLUDED.availability,
+        hourly_rate = EXCLUDED.hourly_rate,
+        gender = EXCLUDED.gender,
+        calendly_url = EXCLUDED.calendly_url,
+        updated_at = NOW()
       RETURNING *
     `;
-    const values = [country, city, address, phoneNumber, dateOfBirth, bio, certificatePath, userId];
+    const values = [userId, country, city, address, phoneNumber, dateOfBirth, bio, monthlyFee, certificatePath,
+      specialization || null, experience || null, languages || null, teachingStyle || null, availability || null, hourlyRate || null, gender || null, calendlyUrl || null];
     const result = await pool.query(query, values);
     return result.rows[0];
+  }
+
+  static async updateQariCertificatePath(userId, certificatePath) {
+    const result = await pool.query(
+      `UPDATE qari_details SET certificate_path = $1, updated_at = NOW() WHERE user_id = $2 RETURNING *`,
+      [certificatePath, userId]
+    )
+    return result.rows[0]
   }
 
   static async deleteUser(id) {
@@ -218,7 +251,9 @@ class UserModel {
       SELECT 
         u.user_id, u.full_name, u.email, u.role, u.created_at,
         sd.country, sd.city, sd.phone_no, sd.guardian_name, sd.guardian_phone,
-        qd.country as qari_country, qd.city as qari_city, qd.phone_no as qari_phone
+        qd.country as qari_country, qd.city as qari_city, qd.phone_no as qari_phone,
+        qd.bio, qd.specialization, qd.experience, qd.languages, qd.teaching_style,
+        qd.availability, qd.hourly_rate, qd.gender, qd.calendly_url, qd.certificate_path
       FROM users u 
       LEFT JOIN student_details sd ON u.user_id = sd.user_id 
       LEFT JOIN qari_details qd ON u.user_id = qd.user_id 
@@ -254,7 +289,8 @@ class UserModel {
   
   static async getQariDetails(userId) {
     const result = await pool.query(
-      `SELECT country, city, address, phone_no, dob, bio, certificate_path
+      `SELECT country, city, address, phone_no, dob, bio, monthly_fee, certificate_path,
+              specialization, experience, languages, teaching_style, availability, hourly_rate, gender, calendly_url
        FROM qari_details WHERE user_id = $1`,
       [userId]
     );

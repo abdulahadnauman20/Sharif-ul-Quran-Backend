@@ -18,7 +18,9 @@ import {
   googleAuthStart,
   googleAuthCallback,
   facebookAuthStart,
-  facebookAuthCallback
+  facebookAuthCallback,
+  updateQariDetails,
+  uploadQariCertificate
 } from '../controllers/authController.js';
 import { authenticateToken } from '../middlewares/authMiddleware.js';
 
@@ -72,6 +74,19 @@ router.put('/profile',
 router.post('/change-password', 
   authenticateToken,
   changePassword
+);
+
+// Qari details update
+router.put('/qari-details', 
+  authenticateToken,
+  updateQariDetails
+);
+
+// Qari certificate upload
+router.post('/qari-certificate', 
+  authenticateToken,
+  upload.single('certificate'),
+  uploadQariCertificate
 );
 
 // Admin routes

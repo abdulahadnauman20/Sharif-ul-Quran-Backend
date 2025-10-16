@@ -50,17 +50,26 @@ const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 // sendOtpEmail using Gmail service (nodemailer must be installed)
 const sendOtpEmail = async (toEmail, code) => {
   try {
+    // Check if SMTP is configured
+    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER;
+    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
+    
+    if (!smtpUser || !smtpPass) {
+      console.log(`[OTP - No SMTP config] To: ${toEmail} Code: ${code}`);
+      return;
+    }
+
     const nodemailer = await import('nodemailer');
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: process.env.SMTP_USER || process.env.EMAIL_USER,
-        pass: process.env.SMTP_PASS || process.env.EMAIL_PASS
+        user: smtpUser,
+        pass: smtpPass
       }
     });
 
     const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.EMAIL_USER || 'teamtestsphere@gmail.com',
+      from: process.env.SMTP_FROM || smtpUser || 'teamtestsphere@gmail.com',
       to: toEmail,
       subject: 'Password Reset OTP',
       text: `Your OTP for password reset is: ${code}. This code expires in 10 minutes.`
@@ -80,6 +89,7 @@ const forgotPassword = async (req, res) => {
   let client;
 
   try {
+    console.log('Forgot password request for email:', email);
     client = await pool.connect();
 
     // Check if user exists
@@ -117,7 +127,16 @@ const forgotPassword = async (req, res) => {
     res.status(200).json(responseBody);
   } catch (err) {
     console.error('Error in forgotPassword:', err);
-    res.status(500).json({ success: false, message: 'Something went wrong. Please try again later.' });
+    console.error('Error details:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code
+    });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Something went wrong. Please try again later.',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
   } finally {
     if (client) client.release();
   }
@@ -504,7 +523,16 @@ const getProfile = async (req, res) => {
         phoneNumber: user.qari_phone,
         dateOfBirth: user.qari_dob,
         bio: user.qari_bio,
-        certificatePath: user.certificate_path
+        monthlyFee: user.qari_monthly_fee,
+        certificatePath: user.certificate_path,
+        specialization: user.qari_specialization,
+        experience: user.qari_experience,
+        languages: user.qari_languages,
+        teachingStyle: user.qari_teaching_style,
+        availability: user.qari_availability,
+        hourlyRate: user.qari_hourly_rate,
+        gender: user.qari_gender,
+        calendlyUrl: user.qari_calendly_url
       };
     }
 
@@ -626,6 +654,66 @@ const updateStudentDetails = async (req, res) => {
     });
   }
 };
+
+// Update Qari details (authenticated)
+const updateQariDetails = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const {
+      country,
+      city,
+      address,
+      phoneNumber,
+      dateOfBirth,
+      bio,
+      monthlyFee,
+      certificatePath,
+      specialization,
+      experience,
+      languages,
+      teachingStyle,
+      availability,
+      hourlyRate,
+      gender,
+      calendlyUrl
+    } = req.body;
+
+    // Basic validation
+    if (!country || !city || !phoneNumber) {
+      return res.status(400).json({ success: false, message: 'Country, city, and phone number are required' })
+    }
+
+    const qariData = {
+      country,
+      city,
+      address: address || '',
+      phoneNumber,
+      dateOfBirth: dateOfBirth || '',
+      bio: bio || '',
+      monthlyFee: monthlyFee ?? null,
+      certificatePath: certificatePath || null,
+      specialization,
+      experience,
+      languages,
+      teachingStyle,
+      availability,
+      hourlyRate,
+      gender,
+      calendlyUrl
+    };
+
+    const updatedQari = await UserModel.updateQariDetails(userId, qariData);
+
+    res.json({
+      success: true,
+      message: 'Qari details updated successfully',
+      data: { qariDetails: updatedQari }
+    })
+  } catch (error) {
+    console.error('Update qari details error:', error)
+    res.status(500).json({ success: false, message: 'Internal server error' })
+  }
+}
 
 const getUsersByType = async (req, res) => {
   try {
@@ -894,6 +982,21 @@ const facebookAuthCallback = async (req, res) => {
   }
 };
 
+const uploadQariCertificate = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    // multer populates req.file
+    if (!req.file || !req.file.path) {
+      return res.status(400).json({ success: false, message: 'No certificate file uploaded' })
+    }
+    const updated = await UserModel.updateQariCertificatePath(userId, req.file.path)
+    res.json({ success: true, message: 'Certificate uploaded', data: { qariDetails: updated } })
+  } catch (e) {
+    console.error('uploadQariCertificate error:', e)
+    res.status(500).json({ success: false, message: 'Failed to upload certificate' })
+  }
+}
+
 export {
   register,
   login,
@@ -908,14 +1011,13 @@ export {
   googleAuthStart,
   googleAuthCallback,
   facebookAuthStart,
-  facebookAuthCallback
-};
-
-// Additional exports for OTP/password reset
-export {
+  facebookAuthCallback,
+  // Additional exports
   forgotPassword,
   verifyOtp,
   resendOtp,
   resetPassword,
-  changePassword
+  changePassword,
+  updateQariDetails,
+  uploadQariCertificate
 };
