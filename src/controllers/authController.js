@@ -50,26 +50,17 @@ const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 // sendOtpEmail using Gmail service (nodemailer must be installed)
 const sendOtpEmail = async (toEmail, code) => {
   try {
-    // Check if SMTP is configured
-    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER;
-    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
-    
-    if (!smtpUser || !smtpPass) {
-      console.log(`[OTP - No SMTP config] To: ${toEmail} Code: ${code}`);
-      return;
-    }
-
     const nodemailer = await import('nodemailer');
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: smtpUser,
-        pass: smtpPass
+        user: process.env.SMTP_USER || process.env.EMAIL_USER,
+        pass: process.env.SMTP_PASS || process.env.EMAIL_PASS
       }
     });
 
     const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM || smtpUser || 'teamtestsphere@gmail.com',
+      from: process.env.SMTP_FROM || process.env.EMAIL_USER || 'teamtestsphere@gmail.com',
       to: toEmail,
       subject: 'Password Reset OTP',
       text: `Your OTP for password reset is: ${code}. This code expires in 10 minutes.`
@@ -89,7 +80,6 @@ const forgotPassword = async (req, res) => {
   let client;
 
   try {
-    console.log('Forgot password request for email:', email);
     client = await pool.connect();
 
     // Check if user exists
@@ -127,16 +117,7 @@ const forgotPassword = async (req, res) => {
     res.status(200).json(responseBody);
   } catch (err) {
     console.error('Error in forgotPassword:', err);
-    console.error('Error details:', {
-      message: err.message,
-      stack: err.stack,
-      code: err.code
-    });
-    res.status(500).json({ 
-      success: false, 
-      message: 'Something went wrong. Please try again later.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again later.' });
   } finally {
     if (client) client.release();
   }
@@ -350,7 +331,9 @@ const register = async (req, res) => {
     }
 
     // Create new user
+    console.log('register: Creating user with data:', userData);
     const newUser = await UserModel.createUser(userData);
+    console.log('register: User created:', newUser);
     
     // Generate JWT token
     const token = generateToken({ 
@@ -358,6 +341,7 @@ const register = async (req, res) => {
       email: newUser.email,
       role: newUser.role
     });
+    console.log('register: Token generated for role:', newUser.role);
 
     // Prepare response data
     const responseData = {
@@ -483,7 +467,14 @@ const login = async (req, res) => {
 
 const getProfile = async (req, res) => {
   try {
+    console.log('getProfile: userId =', req.user.userId);
     const user = await UserModel.findUserById(req.user.userId);
+    console.log('getProfile: user found =', user ? 'yes' : 'no');
+    if (user) {
+      console.log('getProfile: user role =', user.role);
+      console.log('getProfile: user email =', user.email);
+    }
+    
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -887,12 +878,19 @@ const googleAuthCallback = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Google account has no email available' });
     }
 
-    const dbUser = await UserModel.findOrCreateOAuthUser({ email, name, role: 'student' });
-
-    const token = generateToken({ userId: dbUser.user_id, email: dbUser.email, role: dbUser.role });
-
-    const finalUrl = `${FRONTEND_URL}/?token=${encodeURIComponent(token)}#/portal`;
-    return res.redirect(finalUrl);
+    // Check if user already exists
+    const existingUser = await UserModel.findUserByEmail(email);
+    
+    if (existingUser) {
+      // Existing user - sign them in
+      const token = generateToken({ userId: existingUser.user_id, email: existingUser.email, role: existingUser.role });
+      const finalUrl = `${FRONTEND_URL}/?token=${encodeURIComponent(token)}#/portal`;
+      return res.redirect(finalUrl);
+    } else {
+      // New user - redirect to main page with OAuth data to open register modal
+      const finalUrl = `${FRONTEND_URL}/?oauth=true&email=${encodeURIComponent(email)}&name=${encodeURIComponent(name)}&source=google`;
+      return res.redirect(finalUrl);
+    }
   } catch (e) {
     console.error('googleAuthCallback error:', e);
     return res.status(500).json({ success: false, message: 'Failed to handle Google auth callback' });
@@ -970,12 +968,19 @@ const facebookAuthCallback = async (req, res) => {
       email = `${profile.id}@facebook.local`;
     }
 
-    const dbUser = await UserModel.findOrCreateOAuthUser({ email, name, role: 'student' });
-
-    const token = generateToken({ userId: dbUser.user_id, email: dbUser.email, role: dbUser.role });
-
-    const finalUrl = `${FRONTEND_URL}/?token=${encodeURIComponent(token)}#/portal`;
-    return res.redirect(finalUrl);
+    // Check if user already exists
+    const existingUser = await UserModel.findUserByEmail(email);
+    
+    if (existingUser) {
+      // Existing user - sign them in
+      const token = generateToken({ userId: existingUser.user_id, email: existingUser.email, role: existingUser.role });
+      const finalUrl = `${FRONTEND_URL}/?token=${encodeURIComponent(token)}#/portal`;
+      return res.redirect(finalUrl);
+    } else {
+      // New user - redirect to main page with OAuth data to open register modal
+      const finalUrl = `${FRONTEND_URL}/?oauth=true&email=${encodeURIComponent(email)}&name=${encodeURIComponent(name)}&source=facebook`;
+      return res.redirect(finalUrl);
+    }
   } catch (e) {
     console.error('facebookAuthCallback error:', e);
     return res.status(500).json({ success: false, message: 'Failed to handle Facebook auth callback' });

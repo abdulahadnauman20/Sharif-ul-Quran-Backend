@@ -251,9 +251,7 @@ class UserModel {
       SELECT 
         u.user_id, u.full_name, u.email, u.role, u.created_at,
         sd.country, sd.city, sd.phone_no, sd.guardian_name, sd.guardian_phone,
-        qd.country as qari_country, qd.city as qari_city, qd.phone_no as qari_phone,
-        qd.bio, qd.specialization, qd.experience, qd.languages, qd.teaching_style,
-        qd.availability, qd.hourly_rate, qd.gender, qd.calendly_url, qd.certificate_path
+        qd.country as qari_country, qd.city as qari_city, qd.phone_no as qari_phone
       FROM users u 
       LEFT JOIN student_details sd ON u.user_id = sd.user_id 
       LEFT JOIN qari_details qd ON u.user_id = qd.user_id 

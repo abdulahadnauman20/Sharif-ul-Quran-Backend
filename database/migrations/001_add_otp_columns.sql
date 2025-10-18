@@ -62,3 +62,10 @@ CREATE TRIGGER update_calendar_bookings_updated_at
     BEFORE UPDATE ON calendar_bookings
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+
+
+
+
+
+
